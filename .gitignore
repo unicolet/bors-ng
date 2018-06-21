@@ -10,7 +10,7 @@
 erl_crash.dump
 
 # Static artifacts
-/apps/bors_frontend/node_modules
+/node_modules
 
 # Generated documentation
 /doc
@@ -22,3 +22,4 @@ erl_crash.dump
 
 .idea
 *.iml
+/priv/static/
