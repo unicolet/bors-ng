@@ -72,6 +72,16 @@ defmodule BorsNG.GitHub.Server do
     {:reply, result, state}
   end
 
+  def handle_call(:get_installation_list, _from, state) do
+    jwt_token = get_jwt_token()
+    list = get_installation_list_!(
+      jwt_token,
+      "#{site()}/app/installations",
+      [])
+
+    {:reply, {:ok, list}, state}
+  end
+
   def do_handle_call(:get_pr, repo_conn, {pr_xref}) do
     case get!(repo_conn, "pulls/#{pr_xref}") do
       %{body: raw, status_code: 200} ->
@@ -260,19 +270,11 @@ defmodule BorsNG.GitHub.Server do
     end
   end
 
-  def do_handle_call(:get_reviews, repo_conn, {issue_xref}) do
-    repo_conn
-    |> get!("pulls/#{issue_xref}/reviews")
-    |> case do
-      %{body: raw, status_code: 200} ->
-        res = raw
-        |> Poison.decode!()
-        |> GitHub.Reviews.from_json!()
-
-        {:ok, res}
-      _ ->
-        {:error, :get_reviews}
-    end
+  def do_handle_call(:get_reviews, {{:raw, token}, repo_xref}, {issue_xref}) do
+    reviews = token
+    |> get_reviews_json_!("#{site()}/repositories/#{repo_xref}/pulls/#{issue_xref}/reviews", [])
+    |> GitHub.Reviews.from_json!()
+    {:ok, reviews}
   end
 
   def do_handle_call(:get_file, repo_conn, {branch, path}) do
@@ -345,6 +347,26 @@ defmodule BorsNG.GitHub.Server do
       [])}
   end
 
+  defp get_reviews_json_!(_, nil, append) do
+    append
+  end
+
+  defp get_reviews_json_!(token, url, append) do
+    params = get_url_params(url)
+    %{body: raw, status_code: 200, headers: headers} = HTTPoison.get!(
+      url,
+      [
+        {"Authorization", "token #{token}"},
+        {"Accept", @installation_content_type}],
+      [params: params])
+    json = Enum.concat(append, Poison.decode!(raw))
+    next_headers = get_next_headers(headers)
+    case next_headers do
+      [] -> json
+      [next] -> get_reviews_json_!(token, next.next.url, json)
+    end
+  end
+
   @spec get_installation_repos_!(binary, binary, [trepo]) :: [trepo]
   defp get_installation_repos_!(_, nil, repos) do
     repos
@@ -365,6 +387,29 @@ defmodule BorsNG.GitHub.Server do
     case next_headers do
       [] -> repositories
       [next] -> get_installation_repos_!(token, next.next.url, repositories)
+    end
+  end
+
+  @spec get_installation_list_!(binary, binary, [integer]) :: [integer]
+  defp get_installation_list_!(_, nil, list) do
+    list
+  end
+
+  defp get_installation_list_!(jwt_token, url, append) do
+    params = get_url_params(url)
+    %{body: raw, status_code: 200, headers: headers} = HTTPoison.get!(
+      url,
+      [
+        {"Authorization", "Bearer #{jwt_token}"},
+        {"Accept", @installation_content_type}],
+      [params: params])
+    list = Poison.decode!(raw)
+                   |> Enum.map(fn %{"id" => id} -> id end)
+                   |> Enum.concat(append)
+    next_headers = get_next_headers(headers)
+    case next_headers do
+      [] -> list
+      [next] -> get_installation_list_!(jwt_token, next.next.url, list)
     end
   end
 

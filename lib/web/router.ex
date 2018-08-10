@@ -89,6 +89,8 @@ defmodule BorsNG.Router do
     get "/orphans", AdminController, :orphans
     get "/project", AdminController, :project_by_name
     get "/dup-patches", AdminController, :dup_patches
+    post "/synchronize-all-installations", AdminController,
+         :synchronize_all_installations
   end
 
   scope "/auth", BorsNG do
@@ -121,7 +123,7 @@ defmodule BorsNG.Router do
       conn
     else
       conn
-      |> assign(:user, Database.Repo.get!(Database.User, user_id))
+      |> assign(:user, Database.Repo.get(Database.User, user_id))
       |> assign(:avatar_url, Plug.Conn.get_session(conn, :avatar_url))
     end
   end
