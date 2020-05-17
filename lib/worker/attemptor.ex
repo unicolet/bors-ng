@@ -36,8 +36,16 @@ defmodule BorsNG.Worker.Attemptor do
     GenServer.cast(pid, {:tried, patch_id, arguments})
   end
 
+  def cancel(pid, patch_id) when is_integer(patch_id) do
+    GenServer.cast(pid, {:cancel, patch_id})
+  end
+
   def status(pid, stat) do
     GenServer.cast(pid, {:status, stat})
+  end
+
+  def poll(pid) do
+    send(pid, :poll_once)
   end
 
   # Server callbacks
@@ -46,12 +54,14 @@ defmodule BorsNG.Worker.Attemptor do
     Process.send_after(
       self(),
       :poll,
-      trunc(@poll_period * :rand.uniform(2) * 0.5))
+      trunc(@poll_period * :rand.uniform(2) * 0.5)
+    )
+
     {:ok, project_id}
   end
 
   def handle_cast(args, project_id) do
-    Repo.transaction(fn -> do_handle_cast(args, project_id) end)
+    do_handle_cast(args, project_id)
     {:noreply, project_id}
   end
 
@@ -59,8 +69,9 @@ defmodule BorsNG.Worker.Attemptor do
     patch = Repo.get!(Patch, patch_id)
     ^project_id = patch.project_id
     project = Repo.get!(Project, project_id)
-    case Repo.one(Attempt.all_for_patch(patch_id, :incomplete)) do
-      nil ->
+
+    case Repo.all(Attempt.all_for_patch(patch_id, :incomplete)) do
+      [] ->
         # There is no currently running attempt
         # Start one
         if Patch.ci_skip?(patch) do
@@ -69,39 +80,67 @@ defmodule BorsNG.Worker.Attemptor do
           |> send_message(patch, {:preflight, :ci_skip})
         else
           patch
-          |> Attempt.new()
+          |> Attempt.new(arguments)
           |> Repo.insert!()
-          |> start_attempt(project, patch, arguments)
+          |> maybe_start_attempt(project)
         end
-      _attempt ->
+
+      [_attempt | _] ->
         # There is already a running attempt
         project
         |> get_repo_conn()
-        |> send_message(patch, :not_awaiting_review)
+        |> send_message(patch, :already_running_review)
     end
   end
 
   def do_handle_cast({:status, {commit, identifier, state, url}}, project_id) do
-    attempt = Repo.all(Attempt.get_by_commit(commit, :incomplete))
-    case attempt do
+    project_id
+    |> Attempt.get_by_commit(commit, :incomplete)
+    |> Repo.all()
+    |> case do
       [attempt] ->
         patch = Repo.get!(Patch, attempt.patch_id)
         ^project_id = patch.project_id
         project = Repo.get!(Project, project_id)
+
         attempt.id
         |> AttemptStatus.get_for_attempt(identifier)
-        |> Repo.update_all([set: [state: state, url: url]])
+        |> Repo.update_all(set: [state: state, url: url, identifier: identifier])
+
         if attempt.state == :running do
           maybe_complete_attempt(attempt, project, patch)
         end
-      [] -> :ok
+
+      [] ->
+        :ok
     end
   end
 
+  def do_handle_cast({:cancel, patch_id}, project_id) do
+    patch = Repo.get!(Patch, patch_id)
+    ^project_id = patch.project_id
+
+    case Repo.all(Attempt.all_for_patch(patch_id, :incomplete)) do
+      [] ->
+        :ok
+
+      [attempt | _] ->
+        attempt
+        |> Attempt.changeset_state(%{state: :canceled})
+        |> Repo.update!()
+    end
+  end
+
+  def handle_info(:poll_once, project_id) do
+    Repo.transaction(fn -> poll_(project_id) end)
+    {:noreply, project_id}
+  end
+
   def handle_info(:poll, project_id) do
-    case Repo.transaction(fn -> poll(project_id) end) do
+    case Repo.transaction(fn -> poll_(project_id) end) do
       {:ok, :stop} ->
         {:stop, :normal, project_id}
+
       {:ok, :again} ->
         Process.send_after(self(), :poll, @poll_period)
         {:noreply, project_id}
@@ -110,14 +149,18 @@ defmodule BorsNG.Worker.Attemptor do
 
   # Private implementation details
 
-  defp poll(project_id) do
+  defp poll_(project_id) do
     project = Repo.get(Project, project_id)
-    incomplete = project_id
-    |> Attempt.all_for_project(:incomplete)
-    |> Repo.all()
+
+    incomplete =
+      project_id
+      |> Attempt.all_for_project(:running)
+      |> Repo.all()
+
     incomplete
     |> Enum.filter(&Attempt.next_poll_is_past(&1, project))
     |> Enum.each(&poll_attempt(&1, project))
+
     if Enum.empty?(incomplete) do
       :stop
     else
@@ -125,106 +168,153 @@ defmodule BorsNG.Worker.Attemptor do
     end
   end
 
-  defp start_attempt(attempt, project, patch, arguments) do
+  defp maybe_start_attempt(attempt, project) do
+    case Repo.all(Attempt.all_for_project(project.id, :running)) do
+      [] -> start_attempt(attempt, project)
+      [_attempt | _] -> :ok
+    end
+  end
+
+  defp start_attempt(attempt, project) do
+    attempt =
+      attempt
+      |> Repo.preload([:patch])
+
     stmp = "#{project.trying_branch}.tmp"
     repo_conn = get_repo_conn(project)
-    base = GitHub.get_branch!(
-      repo_conn,
-      attempt.into_branch)
+
+    base =
+      GitHub.get_branch!(
+        repo_conn,
+        attempt.into_branch
+      )
+
+    patch = attempt.patch
+    arguments = attempt.arguments
+
     GitHub.synthesize_commit!(
       repo_conn,
       %{
         branch: stmp,
         tree: base.tree,
         parents: [base.commit],
-        commit_message: "[ci skip]",
+        commit_message: "[ci skip][skip ci][skip netlify]",
         committer: nil
-        })
-    merged = GitHub.merge_branch!(
-      repo_conn,
-      %{
-        from: patch.commit,
-        to: stmp,
-        commit_message: "[ci skip] -bors-staging-tmp-#{patch.pr_xref}"})
+      }
+    )
+
+    merged =
+      GitHub.merge_branch!(
+        repo_conn,
+        %{
+          from: patch.commit,
+          to: stmp,
+          commit_message: "[ci skip][skip ci][skip netlify] -bors-staging-tmp-#{patch.pr_xref}"
+        }
+      )
+
     case merged do
       :conflict ->
         send_message(repo_conn, patch, {:conflict, :failed})
+
         attempt
         |> Attempt.changeset(%{state: :error})
         |> Repo.update!()
+
       _ ->
-        toml = Batcher.GetBorsToml.get(
-          repo_conn,
-          stmp)
+        toml =
+          Batcher.GetBorsToml.get(
+            repo_conn,
+            stmp
+          )
+
         case toml do
           {:ok, toml} ->
-            commit = GitHub.synthesize_commit!(
-              repo_conn,
-              %{
-                branch: project.trying_branch,
-                tree: merged.tree,
-                parents: [base.commit, patch.commit],
-                commit_message: "Try \##{patch.pr_xref}:#{arguments}",
-                committer: toml.committer
-                })
+            commit =
+              GitHub.synthesize_commit!(
+                repo_conn,
+                %{
+                  branch: project.trying_branch,
+                  tree: merged.tree,
+                  parents: [base.commit, patch.commit],
+                  commit_message: "Try \##{patch.pr_xref}:#{arguments}",
+                  committer: toml.committer
+                }
+              )
+
             state = setup_statuses(attempt, toml)
-            now = DateTime.to_unix(DateTime.utc_now(), :seconds)
+            now = DateTime.to_unix(DateTime.utc_now(), :second)
+
             attempt
             |> Attempt.changeset(%{
-              state: state, commit: commit, last_polled: now})
+              state: state,
+              commit: commit,
+              last_polled: now
+            })
             |> Repo.update!()
+
           {:error, message} ->
-            setup_statuses_error(repo_conn,
+            setup_statuses_error(
+              repo_conn,
               attempt,
               patch,
-              message)
+              message
+            )
+
             :error
         end
     end
+
     GitHub.delete_branch!(repo_conn, stmp)
   end
 
   defp setup_statuses(attempt, toml) do
     toml.status
-    |> Enum.map(&%AttemptStatus{
+    |> Enum.map(
+      &%AttemptStatus{
         attempt_id: attempt.id,
         identifier: &1,
         url: nil,
-        state: :running})
+        state: :running
+      }
+    )
     |> Enum.each(&Repo.insert!/1)
-    now = DateTime.to_unix(DateTime.utc_now(), :seconds)
+
+    now = DateTime.to_unix(DateTime.utc_now(), :second)
+
     attempt
     |> Attempt.changeset(%{timeout_at: now + toml.timeout_sec})
     |> Repo.update!()
+
     :running
   end
 
   defp setup_statuses_error(repo_conn, attempt, patch, message) do
     message = Batcher.Message.generate_bors_toml_error(message)
+
     attempt
     |> Attempt.changeset(%{state: :error})
     |> Repo.update!()
+
     send_message(repo_conn, patch, {:config, message})
   end
 
   defp poll_attempt(attempt, project) do
     patch = Repo.get!(Patch, attempt.patch_id)
-    now = DateTime.to_unix(DateTime.utc_now(), :seconds)
+    now = DateTime.to_unix(DateTime.utc_now(), :second)
+
     if attempt.timeout_at < now do
       timeout_attempt(attempt, project, patch)
     else
-      gh_statuses = project
+      project
       |> get_repo_conn()
       |> GitHub.get_commit_status!(attempt.commit)
-      |> Enum.map(&{elem(&1, 0), elem(&1, 1)})
-      |> Map.new()
-      attempt.id
-      |> AttemptStatus.all_for_attempt()
-      |> Repo.all()
-      |> Enum.filter(&Map.has_key?(gh_statuses, &1.identifier))
-      |> Enum.map(&{&1, %{state: Map.fetch!(gh_statuses, &1.identifier)}})
-      |> Enum.map(&AttemptStatus.changeset(elem(&1, 0), elem(&1, 1)))
-      |> Enum.each(&Repo.update!/1)
+      |> Enum.each(fn {identifier, state} ->
+        attempt.id
+        |> AttemptStatus.get_for_attempt(identifier)
+        |> Repo.update_all(set: [state: state, identifier: identifier])
+      end)
+
       maybe_complete_attempt(attempt, project, patch)
     end
   end
@@ -233,10 +323,13 @@ defmodule BorsNG.Worker.Attemptor do
     statuses = Repo.all(AttemptStatus.all_for_attempt(attempt.id))
     state = Batcher.State.summary_database_statuses(statuses)
     maybe_complete_attempt(state, project, patch, statuses)
-    now = DateTime.to_unix(DateTime.utc_now(), :seconds)
+    now = DateTime.to_unix(DateTime.utc_now(), :second)
+
     attempt
     |> Attempt.changeset(%{state: state, last_polled: now})
     |> Repo.update!()
+
+    maybe_start_next_attempt(state, project)
   end
 
   defp maybe_complete_attempt(:ok, project, patch, statuses) do
@@ -246,9 +339,13 @@ defmodule BorsNG.Worker.Attemptor do
 
   defp maybe_complete_attempt(:error, project, patch, statuses) do
     repo_conn = get_repo_conn(project)
-    erred = Enum.filter(
-      statuses,
-      &(&1.state == :error))
+
+    erred =
+      Enum.filter(
+        statuses,
+        &(&1.state == :error)
+      )
+
     send_message(repo_conn, patch, {:failed, erred})
   end
 
@@ -256,10 +353,25 @@ defmodule BorsNG.Worker.Attemptor do
     :ok
   end
 
+  defp maybe_start_next_attempt(:running, _project) do
+    :ok
+  end
+
+  defp maybe_start_next_attempt(_state, project) do
+    case Repo.all(Attempt.all_for_project(project.id, :waiting)) do
+      [] ->
+        :ok
+
+      [attempt | _] ->
+        maybe_start_attempt(attempt, project)
+    end
+  end
+
   defp timeout_attempt(attempt, project, patch) do
     project
     |> get_repo_conn()
     |> send_message(patch, {:timeout, :failed})
+
     attempt
     |> Attempt.changeset(%{state: :error})
     |> Repo.update!()
@@ -267,10 +379,12 @@ defmodule BorsNG.Worker.Attemptor do
 
   defp send_message(repo_conn, patch, message) do
     body = Batcher.Message.generate_message(message)
+
     GitHub.post_comment!(
       repo_conn,
       patch.pr_xref,
-      "## try\n\n#{body}")
+      "## try\n\n#{body}"
+    )
   end
 
   @spec get_repo_conn(%Project{}) :: {{:installation, number}, number}

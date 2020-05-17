@@ -8,12 +8,14 @@ defmodule BorsNG.GitHub.OAuth2 do
 
   defp config do
     github = Confex.fetch_env!(:bors, :html_github_root)
+
     cfg = [
       site: Confex.fetch_env!(:bors, :api_github_root),
       strategy: BorsNG.GitHub.OAuth2,
       authorize_url: "#{github}/login/oauth/authorize",
-      token_url: "#{github}/login/oauth/access_token",
+      token_url: "#{github}/login/oauth/access_token"
     ]
+
     :bors
     |> Confex.fetch_env!(BorsNG.GitHub.OAuth2)
     |> Keyword.merge(cfg)
@@ -21,10 +23,11 @@ defmodule BorsNG.GitHub.OAuth2 do
 
   # Public API
 
-  @type t :: OAuth2.Client.t
+  @type t :: OAuth2.Client.t()
 
   def client do
     OAuth2.Client.new(config())
+    |> OAuth2.Client.put_serializer("application/json", Poison)
   end
 
   @spec authorize_url!() :: binary
@@ -41,7 +44,7 @@ defmodule BorsNG.GitHub.OAuth2 do
   @doc """
   Get info about the user we are now logged in as
   """
-  @spec get_user!(t) :: BorsNG.GitHub.User.t
+  @spec get_user!(t) :: BorsNG.GitHub.User.t()
   def get_user!(client) do
     client
     |> OAuth2.Client.get!("/user")
@@ -57,6 +60,7 @@ defmodule BorsNG.GitHub.OAuth2 do
 
   def get_token(client, params, headers) do
     client
+    |> put_param(:client_secret, client.client_secret)
     |> put_header("Accept", "application/json")
     |> AuthCode.get_token(params, headers)
   end

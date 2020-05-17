@@ -32,13 +32,17 @@ defmodule BorsNG.Worker.Attemptor.Registry do
   # Server callbacks
 
   def init(:ok) do
-    names = Project
-    |> Repo.all()
-    |> Enum.map(&{&1.id, do_start(&1.id)})
-    |> Map.new()
-    refs = names
-    |> Enum.map(&{Process.monitor(elem(&1, 1)), elem(&1, 0)})
-    |> Map.new()
+    names =
+      Project.active()
+      |> Repo.all()
+      |> Enum.map(&{&1.id, do_start(&1.id)})
+      |> Map.new()
+
+    refs =
+      names
+      |> Enum.map(&{Process.monitor(elem(&1, 1)), elem(&1, 0)})
+      |> Map.new()
+
     {:ok, {names, refs}}
   end
 
@@ -56,12 +60,15 @@ defmodule BorsNG.Worker.Attemptor.Registry do
   end
 
   def handle_call({:get, project_id}, _from, {names, _refs} = state) do
-    {pid, state} = case names[project_id] do
-      nil ->
-        start_and_insert(project_id, state)
-      pid ->
-        {pid, state}
-    end
+    {pid, state} =
+      case names[project_id] do
+        nil ->
+          start_and_insert(project_id, state)
+
+        pid ->
+          {pid, state}
+      end
+
     {:reply, pid, state}
   end
 
@@ -73,11 +80,14 @@ defmodule BorsNG.Worker.Attemptor.Registry do
 
   def handle_info({:DOWN, ref, :process, _, reason}, {_, refs} = state) do
     project_id = refs[ref]
-    {pid, state} = start_and_insert(project_id, state)
+    {_pid, state} = start_and_insert(project_id, state)
+
     Repo.insert(%Crash{
       project_id: project_id,
       component: "try",
-      crash: inspect(reason, pretty: true, width: 60)})
+      crash: inspect(reason, pretty: true, width: 60)
+    })
+
     {:noreply, state}
   end
 

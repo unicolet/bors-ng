@@ -11,6 +11,7 @@ defmodule BorsNG.AdminController do
 
   use BorsNG.Web, :controller
 
+  alias BorsNG.Database.Crash
   alias BorsNG.Database.Patch
   alias BorsNG.Database.Project
   alias BorsNG.Database.Repo
@@ -23,17 +24,27 @@ defmodule BorsNG.AdminController do
     orphans = Project.orphans()
     orphan_count = from(p in orphans, select: count(p.id))
     [orphan_count] = Repo.all(orphan_count)
-    dup_patches = Repo.all Patch.dups_in_batches()
+    dup_patches = Repo.all(Patch.dups_in_batches())
     dup_patches_count = length(dup_patches)
-    render conn, "index.html",
+    crashes_day = Crash.days(1)
+    [crashes_day] = from(c in crashes_day, select: count(c.id)) |> Repo.all()
+    crashes_week = Crash.days(7)
+    [crashes_week] = from(c in crashes_week, select: count(c.id)) |> Repo.all()
+    crashes_month = Crash.days(30)
+    [crashes_month] = from(c in crashes_month, select: count(c.id)) |> Repo.all()
+
+    render(conn, "index.html",
       orphan_count: orphan_count,
       dup_patches_count: dup_patches_count,
-      wobserver_url: Confex.fetch_env!(:wobserver, :remote_url_prefix)
+      crashes_day: crashes_day,
+      crashes_week: crashes_week,
+      crashes_month: crashes_month
+    )
   end
 
   def orphans(conn, _params) do
-    orphans = Repo.all Project.orphans()
-    render conn, "orphans.html", orphans: orphans
+    orphans = Repo.all(Project.orphans())
+    render(conn, "orphans.html", orphans: orphans)
   end
 
   def dup_patches(conn, _params) do
@@ -41,19 +52,32 @@ defmodule BorsNG.AdminController do
       Patch.dups_in_batches()
       |> Repo.all()
       |> Enum.map(fn patch ->
-          project = Repo.one from(Project, where: [id: ^patch.project_id])
-          {patch, project}
-        end)
-    render conn, "dup-patches.html", patch_proj: patch_proj
+        project = Repo.one(from(Project, where: [id: ^patch.project_id]))
+        {patch, project}
+      end)
+
+    render(conn, "dup-patches.html", patch_proj: patch_proj)
   end
 
   def project_by_name(conn, %{"project" => %{"name" => name}}) do
-    project = Repo.get_by! Project, name: name
-    redirect conn, to: project_path(conn, :show, project.id)
+    project = Repo.get_by!(Project, name: name)
+    redirect(conn, to: project_path(conn, :show, project.id))
   end
 
   def synchronize_all_installations(conn, _params) do
     BorsNG.Worker.SyncerInstallation.start_synchronize_all_installations()
-    redirect conn, to: admin_path(conn, :index)
+    redirect(conn, to: admin_path(conn, :index))
+  end
+
+  def crashes(conn, %{"days" => days}) do
+    crashes =
+      days
+      |> String.to_integer(10)
+      |> Crash.days()
+      |> preload([c], [:project])
+      |> order_by([c], desc: c.inserted_at)
+      |> Repo.all()
+
+    render(conn, "crashes.html", crashes: crashes, days: days)
   end
 end

@@ -1,15 +1,19 @@
 language: elixir
 elixir:
-  - 1.4.5
-  - 1.5
+  - 1.7.3
+  - 1.8.1
 otp_release:
-  - 19.1
   - 20.0
+  - 21.0.9
 branches:
     only:
       - master
       - staging
       - trying
+
+services:
+  - postgresql
+  - mysql
 
 cache:
   directories:
@@ -20,6 +24,7 @@ install:
   - mix do local.rebar --force, local.hex --force, deps.get
 
 script:
+  - if [[ "$ELIXIR_VERSION" = "1.8.1" ]]; then mix format --check-formatted; fi
   - mix test
 
 env:

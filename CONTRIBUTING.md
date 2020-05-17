@@ -8,14 +8,10 @@ Answering support questions
 ---------------------------
 
 If you've been using bors a lot,
-you can help other people use it by answering questions on the [support forum] and the [gitter room].
-You can log in to both using your Github account.
-The more you interact on the forum,
-the more tools you will have to help organize the discussion (for example, fixing other people's categories).
-
+you can help other people use it by answering questions on the [support forum].
+It's running on Discourse, the same app used by Elixir Forum and Rust Users.
 
 [support forum]: https://forum.bors.tech/
-[gitter room]: https://gitter.im/bors-ng/Lobby
 
 
 Submitting bug reports
@@ -78,13 +74,20 @@ Finding something to work on
 ----------------------------
 
 If you're not sure what to work on,
-there's a list of easy-to-fix problems to get you started at <https://bors-ng.github.io/starters>.
+there's a list of easy-to-fix problems to get you started at <https://bors.tech/starters>.
 After you pick an issue,
 you should mention that you're working on it in a GitHub comment
 (so that we can mark it as assigned and avoid duplicate work).
 If you're having trouble fixing the problem,
 go ahead and ask questions right in the issue's comments section,
 even if your question seems unrelated to the issue itself.
+
+
+Proposing and adding new features
+---------------------------------
+
+If you'd like to add a new feature, or make big changes to the way bors works,
+head over to the [RFC](https://forum.bors.tech/t/about-the-draft-rfcs-category/291) area in the forum and follow the instructions.
 
 
 What do the tags in the issue tracker mean?

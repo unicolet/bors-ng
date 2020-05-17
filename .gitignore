@@ -11,6 +11,7 @@ erl_crash.dump
 
 # Static artifacts
 /node_modules
+/assets/node_modules
 
 # Generated documentation
 /doc
@@ -23,3 +24,8 @@ erl_crash.dump
 .idea
 *.iml
 /priv/static/
+
+/.idea
+/*.iml
+/projectFilesBackup
+/projectFilesBackup1

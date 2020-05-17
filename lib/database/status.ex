@@ -5,6 +5,7 @@ defmodule BorsNG.Database.Status do
   array of bors.toml.
   """
 
+  @type t :: %__MODULE__{}
   @type state_n :: 0 | 1 | 2 | 3
   @type state :: :waiting | :running | :ok | :error
 
@@ -12,10 +13,10 @@ defmodule BorsNG.Database.Status do
   alias BorsNG.Database.StatusState
 
   schema "statuses" do
-    belongs_to :batch, Batch
-    field :identifier, :string
-    field :url, :string
-    field :state, StatusState
+    belongs_to(:batch, Batch)
+    field(:identifier, :string)
+    field(:url, :string)
+    field(:state, StatusState)
     timestamps()
   end
 
@@ -25,24 +26,27 @@ defmodule BorsNG.Database.Status do
   end
 
   def get_for_batch(batch_id, identifier) do
-    from s in Status,
+    from(s in Status,
       where: s.batch_id == ^batch_id,
-      where: s.identifier == ^identifier
+      where: fragment("? LIKE ?", ^identifier, s.identifier)
+    )
   end
 
   def all_for_batch(batch_id) do
-    from s in Status, where: s.batch_id == ^batch_id
+    from(s in Status, where: s.batch_id == ^batch_id)
   end
 
   def all_for_batch(batch_id, :incomplete) do
-    from s in Status,
+    from(s in Status,
       where: s.batch_id == ^batch_id,
       where: s.state == 1 or s.state == 0
+    )
   end
 
   def all_for_batch(batch_id, state) do
-    from s in Status,
+    from(s in Status,
       where: s.batch_id == ^batch_id,
       where: s.state == ^state
+    )
   end
 end

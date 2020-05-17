@@ -2,12 +2,16 @@
   "name": "Bors-NG",
   "description": "A merge bot for GitHub pull requests",
   "repository": "https://github.com/bors-ng/bors-ng",
-  "website": "https://bors-ng.github.io/",
+  "website": "https://bors.tech/",
   "logo": "https://cdn.rawgit.com/bors-ng/bors-ng/b9e756ecfdf4ede9241a8a30cbfdc4c010fd0a22/icon/bors-eye.svg",
   "keywords": ["github", "continuous-integration", "continuous-testing", "elixir", "phoenix"],
 
   "success_url": "/auth/github",
   "env": {
+    "COMMAND_TRIGGER": {
+      "description": "Prefix for all commands",
+      "value": "bors"
+    },
     "MIX_ENV": {
       "description": "Mode to run the application in",
       "value": "prod"
@@ -18,6 +22,10 @@
     },
     "PUBLIC_HOST": {
       "description": "Where this website will be running (probably <app name>.herokuapp.com)"
+    },
+    "PUBLIC_PORT": {
+      "description": "HTTPS port number on PUBLIC_HOST",
+      "value": "443"
     },
     "SECRET_KEY_BASE": {
       "description": "A secret key for verifying the integrity of cookies",
